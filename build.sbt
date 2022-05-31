@@ -63,3 +63,9 @@ scalacOptions ++= scalacOptionsVersion(scalaVersion.value)
 javacOptions ++= javacOptionsVersion(scalaVersion.value)
 
 trapExit := false
+
+lazy val caravan = project in file("caravan")
+
+lazy val jigsaw = (project in file("jigsaw")).dependsOn(caravan)
+
+dependsOn(caravan, jigsaw)

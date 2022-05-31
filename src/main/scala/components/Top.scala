@@ -22,11 +22,11 @@ class Top(programFile:Option[String], dataFile:Option[String], val AW:Int = 10) 
   val dmemAdapter = Module(new WishboneAdapter() /*WishboneAdapter()*/) //dmemAdapter
 
   // TODO: Make RAMs generic
-  // val imemCtrl = Module(BlockRam.createNonMaskableRAM(programFile, config, 8192))
+  val imemCtrl = Module(BlockRam.createNonMaskableRAM(programFile, config, 8192))
 //  val dmemCtrl = Module(BlockRam.createNonMaskableRAM(programFile, config, 8192))
-  // val dmemCtrl = Module(BlockRam.createMaskableRAM(config, 8192))
-  val dmemCtrl = Module(new SRAM1kb(new WBRequest, new WBResponse)(dataFile, AW))
-  val imemCtrl = Module(new SRAM1kb(new WBRequest, new WBResponse)(programFile, AW))
+  val dmemCtrl = Module(BlockRam.createMaskableRAM(config, 8192))
+  // val dmemCtrl = Module(new SRAM1kb(new WBRequest, new WBResponse)(dataFile, AW))
+  // val imemCtrl = Module(new SRAM1kb(new WBRequest, new WBResponse)(programFile, AW))
 
   /*  Imem Interceonnections  */
   imemAdapter.io.reqIn <> core.io.imemReq
