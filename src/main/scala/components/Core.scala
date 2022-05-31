@@ -4,11 +4,15 @@ import chisel3._
 import chisel3.util._
 import caravan.bus.common.{AbstrRequest, AbstrResponse, BusConfig}
 import components.{RVFI, RVFIPORT}
+import chisel3.util.Enum
+import jigsaw.peripherals.programmable_uart._
 
 class Core(val req:AbstrRequest, val rsp:AbstrResponse)(implicit val config:BusConfig) extends Module {
   val io = IO(new Bundle {
     val pin: UInt = Output(UInt(32.W))
-    val stall: Bool = Input(Bool())
+    // val stall: Bool = Input(Bool())
+    val rx_i: UInt = Input(UInt(1.W))
+    val CLK_PER_BIT:UInt = Input(UInt(16.W))
 
     val dmemReq = Decoupled(req)
     val dmemRsp = Flipped(Decoupled(rsp))
@@ -77,17 +81,139 @@ class Core(val req:AbstrRequest, val rsp:AbstrResponse)(implicit val config:BusC
    * Fetch Stage *
    ******************/
 
+  // PUART
+  val puart = Module(new PUart)
+  puart.io.rxd := io.rx_i
+  puart.io.CLK_PER_BIT := io.CLK_PER_BIT
+
+  IF.stall :=  false.B
+  puart.io.isStalled   :=  false.B
+
+  val idle :: read_uart :: write_iccm :: prog_finish :: Nil = Enum(4)
+  val state = RegInit(idle)
+  val reset_reg = RegInit(true.B)
+  reset_reg := reset.asBool()
+  val rx_data_reg                   =       RegInit(0.U(32.W))
+  val rx_addr_reg                   =       RegInit(0.U(32.W))
+  // val  state_check = RegInit(0.B)
+
+  when(~puart.io.done){
+    io.imemReq.bits.addrRequest := 0.U
+    io.imemReq.bits.dataRequest := 0.U
+    io.imemReq.bits.activeByteLane := 0xffff.U
+    io.imemReq.bits.isWrite := 0.B
+    io.imemReq.valid := 0.B
+    io.imemRsp.ready := true.B
+    when(state === idle){
+      // checking to see if the reset button was pressed previously and now it falls back to 0 for starting the read uart condition
+        when(reset_reg === true.B && reset.asBool() === false.B) {
+            state :=  read_uart
+        }.otherwise {
+            state := idle
+        }
+
+        // setting all we_i to be false, since nothing to be written
+        // instr_we.foreach(w => w := false.B)
+        io.imemReq.valid := false.B
+        //instr_we                       :=       false.B  // active high
+        // instr_addr                     :=       iccm_wb_device.io.addr_o
+        // instr_wdata                    :=       DontCare
+        IF.stall :=  true.B
+        puart.io.isStalled   :=  false.B
+    }
+    .elsewhen(state === read_uart){
+        // state_check := 0.B
+        // when valid 32 bits available the next state would be writing into the ICCM.
+        when(puart.io.valid) {
+            state                    :=       write_iccm
+
+        }.elsewhen(puart.io.done) {
+            // if getting done signal it means the read_uart state got a special ending instruction which means the
+            // program is finish and no need to write to the iccm so the next state would be prog_finish
+
+            state                  :=       prog_finish
+
+        }.otherwise {
+            // if not getting valid or done it means the 32 bits have not yet been read by the UART.
+            // so the next state would still be read_uart
+
+            state                  :=       read_uart
+        }
+
+        // setting all we_i to be false, since nothing to be written
+        // instr_we.foreach(w => w := false.B)
+        io.imemReq.valid := false.B
+        IF.stall           :=       true.B
+        puart.io.isStalled              :=       true.B
+
+        // store data and addr in registers if uart_ctrl.valid is high to save it since going to next state i.e write_iccm
+        // will take one more cycle which may make the received data and addr invalid since by then another data and addr
+        // could be written inside it.
+
+        rx_data_reg                    :=       Mux(puart.io.valid, puart.io.rx_data_o, 0.U)
+        //    rx_addr_reg                    :=       Mux(puart.io.valid, puart.io.addr_o << 2, 0.U)    // left shifting address by 2 since uart ctrl sends address in 0,1,2... format but we need it in word aligned so 1 translated to 4, 2 translates to 8 (dffram requirement)
+        rx_addr_reg                    :=       Mux(puart.io.valid, puart.io.addr_o << 2, 0.U)
+    }
+    .elsewhen(state === write_iccm){
+      // when writing to the iccm state checking if the uart received the ending instruction. If it does then
+      // the next state would be prog_finish and if it doesn't then we move to the read_uart state again to
+      // read the next instruction
+        when(puart.io.done) {
+
+            state                   :=       prog_finish
+
+        }.otherwise {
+
+            state                   :=       read_uart
+
+        }
+        // setting all we_i to be true, since instruction (32 bit) needs to be written
+        // instr_we.foreach(w => w := true.B)
+        io.imemReq.valid := true.B
+        io.imemReq.bits.addrRequest := rx_addr_reg
+        io.imemReq.bits.dataRequest := rx_data_reg
+        io.imemReq.bits.activeByteLane := 0xffff.U
+        io.imemReq.bits.isWrite := 1.B
+        // keep stalling the core
+        IF.stall                   :=       true.B
+        puart.io.isStalled         :=       true.B
+    }
+    .elsewhen(state === prog_finish){
+        // setting all we_i to be false, since nothing to be written
+        // instr_we.foreach(w => w := false.B)
+        io.imemReq.valid := false.B
+        //instr_we                       :=       true.B   // active low
+        // instr_wdata                    :=       DontCare
+        // instr_addr                     :=       iccm_wb_device.io.addr_o
+        IF.stall                   :=       false.B
+        puart.io.isStalled         :=       false.B
+        state                      :=       idle
+        // state_check := 1.B
+    }
+
+    IF.coreInstrResp.bits.dataResponse := 0.U
+    IF.coreInstrResp.bits.error := 0.B
+    // IF.coreInstrResp.bits.ackWrite := 0.B
+    IF.coreInstrResp.valid := 0.B
+    IF.coreInstrReq.ready := true.B
+
+  }
+  .otherwise{
+        io.imemReq <> IF.coreInstrReq
+        IF.coreInstrResp <> io.imemRsp
+  }
+
   val pc = Module(new PC)
 
-  IF.stall := io.stall //stall signal from outside
+  // IF.stall := io.stall //stall signal from outside
   
-  io.imemReq <> IF.coreInstrReq
-  IF.coreInstrResp <> io.imemRsp
+  // io.imemReq <> IF.coreInstrReq
+  // IF.coreInstrResp <> io.imemRsp
 
   IF.address := pc.io.in.asUInt()
   val instruction = Mux(io.imemRsp.valid, IF.instruction, "h00000013".U(32.W))
 
-  pc.io.halt := Mux(io.imemReq.valid, 0.B, 1.B)
+  pc.io.halt := Mux(IF.coreInstrReq.valid, 0.B, 1.B)
   pc.io.in := Mux(ID.hdu_pcWrite && !MEM.io.stall, Mux(ID.pcSrc, ID.pcPlusOffset.asSInt(), pc.io.pc4), pc.io.out)
 
 
