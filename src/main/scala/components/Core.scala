@@ -67,6 +67,8 @@ class Core(val req:AbstrRequest, val rsp:AbstrResponse)(implicit val config:BusC
   val mem_reg_ctl_regWrite = RegInit(false.B)
   val mem_reg_pc = RegInit(0.U(32.W))
 
+  val divEnable = RegInit(false.B)
+
   //Pipeline Units
   val IF = Module(new InstructionFetch(req, rsp)).io
   val ID = Module(new InstructionDecode).io
@@ -87,7 +89,14 @@ class Core(val req:AbstrRequest, val rsp:AbstrResponse)(implicit val config:BusC
   IF.address := pc.io.in.asUInt()
   val instruction = Mux(io.imemRsp.valid, IF.instruction, "h00000013".U(32.W))
 
-  pc.io.halt := Mux(io.imemReq.valid, 0.B, 1.B)
+  
+  when(ID.func7 === 1.U && ~divEnable){
+    divEnable := true.B
+  }
+  when(EX.divFinish){
+    divEnable := false.B
+  }
+  pc.io.halt := Mux((divEnable || (ID.func7 === 1.U && ~divEnable)) && ~EX.divFinish, 1.B, Mux(io.imemReq.valid, 0.B, 1.B))
   pc.io.in := Mux(ID.hdu_pcWrite && !MEM.io.stall, Mux(ID.pcSrc, ID.pcPlusOffset.asSInt(), pc.io.pc4), pc.io.out)
 
 
@@ -150,6 +159,7 @@ class Core(val req:AbstrRequest, val rsp:AbstrResponse)(implicit val config:BusC
   EX.ctl_aluSrc := id_reg_ctl_aluSrc
   EX.ctl_aluOp := id_reg_ctl_aluOp
   EX.ctl_aluSrc1 := id_reg_ctl_aluSrc1
+  EX.divEnable := divEnable
   //EX.ctl_branch := id_reg_ctl_branch
   //EX.ctl_jump := id_reg_ctl_jump
   ex_reg_pc := id_reg_pc
@@ -171,6 +181,7 @@ class Core(val req:AbstrRequest, val rsp:AbstrResponse)(implicit val config:BusC
   ID.id_ex_branch := Mux(id_reg_ins(6,0) === "b1100011".asUInt(), true.B, false.B )
   ID.ex_mem_rd := ex_reg_ins(11, 7)
   ID.ex_result := EX.ALUresult
+
 
 
   /****************
@@ -220,6 +231,10 @@ class Core(val req:AbstrRequest, val rsp:AbstrResponse)(implicit val config:BusC
   /********************
    * Write Back Stage *
    ********************/
+
+  when(EX.divFinish){
+     mem_reg_result := EX.ALUresult
+   }
 
   val wb_data = Wire(UInt(32.W))
   val wb_addr = Wire(UInt(5.W))

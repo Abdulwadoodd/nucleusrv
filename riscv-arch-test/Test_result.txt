@@ -1,0 +1,9 @@
+make  \
+	RISCV_TARGET=nucleusrv \
+	RISCV_DEVICE=rv32im \
+	RISCV_PREFIX=riscv32-unknown-elf- \
+	run -C /home/mordok/theSoCNow/SoC-Now-Generator/compliance/riscv-arch-test/riscv-test-suite/rv32im
+make[1]: Entering directory '/home/mordok/theSoCNow/SoC-Now-Generator/compliance/riscv-arch-test/riscv-test-suite/rv32im'
+Compile /home/mordok/theSoCNow/SoC-Now-Generator/compliance/riscv-arch-test/work/rv32im/DIVU.elf
+Execute /home/mordok/theSoCNow/SoC-Now-Generator/compliance/riscv-arch-test/work/rv32im/DIVU.log
+make[1]: Leaving directory '/home/mordok/theSoCNow/SoC-Now-Generator/compliance/riscv-arch-test/riscv-test-suite/rv32im'
